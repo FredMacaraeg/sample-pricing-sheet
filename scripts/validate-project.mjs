@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -9,6 +10,7 @@ const requiredFiles = [
   "TESTING.md",
   "Code.gs",
   "appsscript.json",
+  ".github/workflows/sample-pricing-sheet-quality.yml",
 ];
 
 const failures = [];
@@ -27,7 +29,33 @@ if (fs.existsSync(workbookPath)) {
   const zipSignature = workbook.subarray(0, 4).toString("hex");
   if (zipSignature !== "504b0304") fail("Workbook does not have a valid XLSX ZIP signature");
   else if (workbook.length < 20000) fail("Workbook is unexpectedly small");
-  else pass(`workbook ZIP integrity looks valid (${workbook.length} bytes)`);
+  else {
+    try {
+      execFileSync("unzip", ["-t", workbookPath], { stdio: "ignore" });
+      const workbookXml = execFileSync("unzip", ["-p", workbookPath, "xl/workbook.xml"], { encoding: "utf8" });
+      const entries = execFileSync("unzip", ["-Z1", workbookPath], { encoding: "utf8" }).trim().split(/\r?\n/);
+      const modelEntries = entries.filter(entry => entry === "xl/sharedStrings.xml" || entry.startsWith("xl/worksheets/sheet"));
+      const modelText = execFileSync("unzip", ["-p", workbookPath, ...modelEntries], { encoding: "utf8", maxBuffer: 10 * 1024 * 1024 });
+      for (const sheetName of ["Pricing Summary", "Quote Builder", "Pricing Cases", "Portfolio Metrics", "Assumptions", "Quote Log"]) {
+        if (!workbookXml.includes(`name="${sheetName}"`)) fail(`Workbook is missing required sheet: ${sheetName}`);
+      }
+      for (const token of ["COUNTIFS", "VP approval: discount above guardrail", "Trade discount for longer term", "Trade discount for annual prepay", "Within guardrails", "n.a."]) {
+        if (!modelText.includes(token)) fail(`Workbook is missing required pricing-control token: ${token}`);
+      }
+      if (!failures.some(item => item.startsWith("Workbook"))) pass(`workbook package and pricing-control formulas are valid (${workbook.length} bytes)`);
+    } catch (error) {
+      fail(`Workbook package validation failed: ${error.message}`);
+    }
+  }
+}
+
+const workflowPath = path.join(projectRoot, ".github/workflows/sample-pricing-sheet-quality.yml");
+if (fs.existsSync(workflowPath)) {
+  const workflow = fs.readFileSync(workflowPath, "utf8");
+  for (const token of ["actions/checkout@v7", "actions/setup-node@v7", "node-version: 24", "package-manager-cache: false"]) {
+    if (!workflow.includes(token)) fail(`GitHub Actions workflow is missing current runtime setting: ${token}`);
+  }
+  if (!failures.some(item => item.startsWith("GitHub Actions workflow"))) pass("GitHub Actions uses the current checkout, setup-node, and Node runtime versions");
 }
 
 const manifestPath = path.join(projectRoot, "appsscript.json");
