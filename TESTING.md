@@ -2,7 +2,7 @@
 
 ## Automated project check
 
-From `pricing-model/sample-pricing-sheet` run:
+From the repository root, run:
 
 ```bash
 node scripts/validate-project.mjs
